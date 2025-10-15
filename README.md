@@ -1,4 +1,4 @@
-# Tattletale
+# Tattletail
 
 a javascript instrumentation script that logs out all evaluated variables and functions
 

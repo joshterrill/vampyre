@@ -1,5 +1,5 @@
 {
-  "name": "tattletale",
+  "name": "tattletail",
   "version": "0.0.1",
   "description": "",
   "main": "instrument.js",
@@ -8,15 +8,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joshterrill/tattletale.git"
+    "url": "git+https://github.com/joshterrill/tattletail.git"
   },
   "keywords": [],
   "author": "Josh Terrill <josh@hacked.codes>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/joshterrill/tattletale/issues"
+    "url": "https://github.com/joshterrill/tattletail/issues"
   },
-  "homepage": "https://github.com/joshterrill/tattletale#readme",
+  "homepage": "https://github.com/joshterrill/tattletail#readme",
   "dependencies": {
     "@babel/generator": "^7.28.3",
     "@babel/parser": "^7.28.4",
