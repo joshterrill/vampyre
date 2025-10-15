@@ -1,0 +1,26 @@
+{
+  "name": "tattletale",
+  "version": "0.0.1",
+  "description": "",
+  "main": "instrument.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joshterrill/tattletale.git"
+  },
+  "keywords": [],
+  "author": "Josh Terrill <josh@hacked.codes>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/joshterrill/tattletale/issues"
+  },
+  "homepage": "https://github.com/joshterrill/tattletale#readme",
+  "dependencies": {
+    "@babel/generator": "^7.28.3",
+    "@babel/parser": "^7.28.4",
+    "@babel/traverse": "^7.28.4",
+    "@babel/types": "^7.28.4"
+  }
+}
