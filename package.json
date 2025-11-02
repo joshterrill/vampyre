@@ -1,6 +1,6 @@
 {
-  "name": "tattletail",
-  "version": "0.0.1",
+  "name": "vampyre",
+  "version": "0.0.2",
   "description": "",
   "main": "instrument.js",
   "scripts": {
@@ -8,15 +8,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/joshterrill/tattletail.git"
+    "url": "git+https://github.com/joshterrill/vampyre.git"
   },
   "keywords": [],
   "author": "Josh Terrill <josh@hacked.codes>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/joshterrill/tattletail/issues"
+    "url": "https://github.com/joshterrill/vampyre/issues"
   },
-  "homepage": "https://github.com/joshterrill/tattletail#readme",
+  "homepage": "https://github.com/joshterrill/vampyre#readme",
   "dependencies": {
     "@babel/generator": "^7.28.3",
     "@babel/parser": "^7.28.4",

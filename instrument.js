@@ -363,12 +363,17 @@ function wrapEvalAndFunctionInContext(context, instrumentFunc) {
 }
 
 
-function runInstrumentedFile(inputPath) {
+function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsole = false) {
   const src = fs.readFileSync(inputPath, 'utf8');
   const instrumented = instrumentCode(src);
 
-  fs.writeFileSync('instrumented.js', instrumented, 'utf8');
-  console.log('Wrote instrumented.js');
+  fs.writeFileSync(outputPath, instrumented, 'utf8');
+  console.log(`Wrote ${outputPath}`);
+
+  if (!execute) {
+    console.log('Skipping execution (--no-execute)');
+    return;
+  }
 
   const logStream = fs.createWriteStream('observations.jsonl', { flags: 'a' });
 
@@ -380,24 +385,22 @@ function runInstrumentedFile(inputPath) {
     clearTimeout,
     clearInterval,
     globalThis: {},
-    // will add __report below
   };
 
-  // create a basic DOM-like environment for code that references window/document
   context.window = context;
   context.document = {
-    createElement: (tag) => ({ tagName: tag, setAttribute() {}, appendChild() {}, innerHTML: '', src: '', href: '' }),
+    createElement: (tag) => ({ tagName: tag, setAttribute() { }, appendChild() { }, innerHTML: '', src: '', href: '' }),
     querySelector: () => null,
     querySelectorAll: () => [],
     getElementById: () => null,
-    body: { appendChild() {}, removeChild() {} },
-    head: { appendChild() {}, removeChild() {} },
-    addEventListener() {},
-    removeEventListener() {},
+    body: { appendChild() { }, removeChild() { } },
+    head: { appendChild() { }, removeChild() { } },
+    addEventListener() { },
+    removeEventListener() { },
     location: { href: 'http://localhost/' },
   };
   context.navigator = { userAgent: 'NodeFake' };
-  context.location = { href: 'http://localhost/', assign() {}, replace() {}, reload() {} };
+  context.location = { href: 'http://localhost/', assign() { }, replace() { }, reload() { } };
   context.window.document = context.document;
 
   context.__report = function (name, value) {
@@ -420,21 +423,17 @@ function runInstrumentedFile(inputPath) {
       }
       const rec = { ts: Date.now(), name, value: snapshot };
       logStream.write(JSON.stringify(rec) + '\n');
-      if (process.env.REPORT_CONSOLE === '1') console.log('[__report]', rec);
-    } catch (err) {
-      // do nothing to avoid crashing the instrumented code
-    }
+      if (reportConsole) console.log('[__report]', rec);
+    } catch (err) { }
     return value;
   };
 
-  // attach some additional globals into the VM context
   const ctx = vm.createContext(context);
   ctx.global = ctx;
   ctx.window = ctx;
   ctx.navigator = context.navigator;
   ctx.document = context.document;
 
-  // instrument eval/Function inside this context
   wrapEvalAndFunctionInContext(ctx, (codeStr) => {
     try {
       return instrumentCode(codeStr);
@@ -449,20 +448,42 @@ function runInstrumentedFile(inputPath) {
   } catch (err) {
     console.error('Execution error:', err && err.stack ? err.stack : err);
   } finally {
-    // close log stream
     logStream.end(() => {
       console.log('Observations appended to observations.jsonl');
     });
   }
 }
 
+// ──────────────────────────────────────────────────────────────
+// CLI argument handling
+// ──────────────────────────────────────────────────────────────
 if (require.main === module) {
-  const inputPath = process.argv[2] || 'input.js';
+  const args = process.argv.slice(2);
+  let inputPath = 'input.js';
+  let outputPath = 'output.js';
+  let execute = true;
+  let reportConsole = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg.startsWith('--')) {
+      inputPath = arg;
+    } else if (arg === '--no-execute') {
+      execute = false;
+    } else if (arg === '--output') {
+      outputPath = args[i + 1];
+      i++;
+    } else if (arg === '--report-console') {
+      reportConsole = true;
+    }
+  }
+
   if (!fs.existsSync(inputPath)) {
     console.error('Error: input file not found:', inputPath);
     process.exit(2);
   }
-  runInstrumentedFile(inputPath);
+
+  runInstrumentedFile(inputPath, outputPath, execute, reportConsole);
 }
 
 module.exports = { instrumentCode };

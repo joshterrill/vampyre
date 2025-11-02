@@ -1,14 +1,28 @@
-# Tattletail
+# vampyre
 
-a javascript instrumentation script that logs out all evaluated variables and functions
+<div align="center">
+  <img src="./vampyre.webp" width="100" />
+</div>
+
+a javascript instrumentation script that hooks all variable evaluations and logs out its state. Primarily used for assisting with highly obfuscated javascript/node code.
+
+_**Warning**: This will execute arbitrary code on the machine it runs on. Beware._
 
 ## Usage
 
-The following script produces `observations.jsonl` and `instrumented.js`:
+The following script produces `observations.jsonl` and `output.js`:
+
+Optional args:
+
+- `--output <output_path>` saves instrumented output file to specified path
+- `--no-execute` saves instrumented output file but does not execute it
+
+- `--report-console` logs eval state output to console after instrumentation output run
 
 ```bash
-REPORT_CONSOLE=1 node instrument.js examples/simple.js
-# Wrote instrumented.js
+node instrument.js examples/simple.js --report-console
+
+# Wrote output.js
 # [__report] {
 #   ts: 1760493315667,
 #   name: 'people',

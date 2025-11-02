@@ -1,4 +1,4 @@
 .DS_Store
 node_modules/
-instrumented.js
+output.js
 observations.jsonl
