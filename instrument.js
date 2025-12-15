@@ -39,6 +39,31 @@ function safeReportWrap(nameStr, valueNode) {
   return makeReporterCall(nameStr, valueNode);
 }
 
+function wrapLoopWithContext(path) {
+  if (path.node.__loopInstrumented) return;
+  path.node.__loopInstrumented = true;
+
+  let targetPath = path;
+  while (
+    targetPath.parentPath &&
+    targetPath.parentPath.isLabeledStatement() &&
+    targetPath.parentPath.node.body === targetPath.node
+  ) {
+    targetPath = targetPath.parentPath;
+  }
+
+  const loopId = path.scope.generateUid('loopCtx');
+  const loopLiteral = t.stringLiteral(loopId);
+  const enterCall = t.expressionStatement(t.callExpression(t.identifier('__loopContextEnter'), [loopLiteral]));
+  const exitCall = t.expressionStatement(t.callExpression(t.identifier('__loopContextExit'), [loopLiteral]));
+
+  const originalNode = targetPath.node;
+  const tryStmt = t.tryStatement(t.blockStatement([originalNode]), null, t.blockStatement([exitCall]));
+  const block = t.blockStatement([enterCall, tryStmt]);
+
+  targetPath.replaceWith(block);
+}
+
 function transformUpdateExpression(path) {
   const node = path.node;
   const arg = node.argument;
@@ -259,7 +284,8 @@ function expandAssignmentDestructuring(path) {
 }
 
 // main instrumentation function
-function instrumentCode(sourceCode) {
+function instrumentCode(sourceCode, options = {}) {
+  const { enableLoopContext = false } = options;
   const ast = parser.parse(sourceCode, {
     sourceType: 'unambiguous',
     plugins: [
@@ -267,6 +293,26 @@ function instrumentCode(sourceCode) {
       'numericSeparator', 'topLevelAwait', 'bigInt', 'optionalCatchBinding', 'nullishCoalescingOperator'
     ]
   });
+
+  if (enableLoopContext) {
+    traverse(ast, {
+      ForStatement(path) {
+        wrapLoopWithContext(path);
+      },
+      WhileStatement(path) {
+        wrapLoopWithContext(path);
+      },
+      DoWhileStatement(path) {
+        wrapLoopWithContext(path);
+      },
+      ForInStatement(path) {
+        wrapLoopWithContext(path);
+      },
+      ForOfStatement(path) {
+        wrapLoopWithContext(path);
+      },
+    });
+  }
 
   traverse(ast, {
     VariableDeclaration(path) {
@@ -362,10 +408,139 @@ function wrapEvalAndFunctionInContext(context, instrumentFunc) {
   context.Function.prototype = OriginalFunction.prototype;
 }
 
+function createLoopAwareReporter(logStream, reportConsole, loopTailWindow, repeatingPatternWindow, suppressTruncationLogs = false) {
+  const tailWindow = Math.max(0, Math.floor(Number(loopTailWindow) || 0));
+  const tailEnabled = tailWindow > 0;
+  const loopStack = [];
 
-function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsole = false) {
+  // For deduplication by name/value pair
+  const repeatWindow = Math.max(0, Math.floor(Number(repeatingPatternWindow) || 0));
+  const patternCounts = new Map();
+  const suppressionNotified = new Set();
+
+  const writeRecord = (rec) => {
+    const streamWritable = logStream && !logStream.destroyed && !logStream.writableEnded && !logStream.closed;
+    if (streamWritable) {
+      logStream.write(JSON.stringify(rec) + '\n');
+    }
+    if (reportConsole) console.log('[__report]', rec);
+  };
+
+  const patternKeyFor = (rec) => {
+    try {
+      return `${rec.name}::${JSON.stringify(rec.value)}`;
+    } catch (err) {
+      return `${rec.name}::${String(rec.value)}`;
+    }
+  };
+
+  const dedupEmit = (rec) => {
+    if (repeatWindow > 0) {
+      const key = patternKeyFor(rec);
+      const nextCount = (patternCounts.get(key) || 0) + 1;
+      patternCounts.set(key, nextCount);
+      if (nextCount > repeatWindow) {
+        if (!suppressTruncationLogs && !suppressionNotified.has(key)) {
+          suppressionNotified.add(key);
+          writeRecord({
+            ts: Date.now(),
+            name: '__repeat_truncated__',
+            value: { name: rec.name, value: rec.value, limit: repeatWindow },
+          });
+        }
+        return; // suppress duplicate beyond allowed window
+      }
+    }
+    writeRecord(rec);
+  };
+
+  const emit = (rec) => {
+    if (!tailEnabled || loopStack.length === 0) {
+      dedupEmit(rec);
+      return;
+    }
+    const ctx = loopStack[loopStack.length - 1];
+    ctx.buffer.push(rec);
+    if (ctx.buffer.length > tailWindow) {
+      ctx.buffer.shift();
+      ctx.dropped += 1;
+    }
+  };
+
+  const snapshotValue = (value) => {
+    if (value === undefined) return undefined;
+    if (typeof value === 'function') return `[Function: ${value.name || 'anonymous'}]`;
+    if (typeof value === 'bigint') return `${value}n`;
+    if (typeof value === 'object' && value !== null) {
+      try {
+        const serialized = JSON.stringify(value, (_, v) => (typeof v === 'bigint' ? `${v}n` : v));
+        return JSON.parse(serialized);
+      } catch (err) {
+        try {
+          return String(value);
+        } catch (e) {
+          return Object.prototype.toString.call(value);
+        }
+      }
+    }
+    return value;
+  };
+
+  const report = function (name, value) {
+    try {
+      const rec = { ts: Date.now(), name, value: snapshotValue(value) };
+      emit(rec);
+    } catch (err) { }
+    return value;
+  };
+
+  const loopEnter = tailEnabled
+    ? function (id) {
+      loopStack.push({ id, buffer: [], dropped: 0 });
+    }
+    : function noop() { };
+
+  const loopExit = tailEnabled
+    ? function (id) {
+      if (!loopStack.length) return;
+      const ctx = loopStack.pop();
+      if (ctx.dropped > 0 && !suppressTruncationLogs) {
+        emit({
+          ts: Date.now(),
+          name: '__loop_truncated__',
+          value: { loopId: id, dropped: ctx.dropped, kept: ctx.buffer.length },
+        });
+      }
+      ctx.buffer.forEach((rec) => emit(rec));
+    }
+    : function noop() { };
+
+  return { report, loopEnter, loopExit };
+}
+
+function parseNonNegativeArg(raw, flagName) {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    console.error(`Error: ${flagName} expects a numeric value, received "${raw}"`);
+    process.exit(2);
+  }
+  return Math.max(0, Math.floor(parsed));
+}
+
+function parseLoopTailArg(raw) {
+  return parseNonNegativeArg(raw, '--loop-tail');
+}
+
+function parseRepeatingPatternArg(raw) {
+  return parseNonNegativeArg(raw, '--repeating-pattern');
+}
+
+
+function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsole = false, loopTailWindow = 0, repeatingPatternWindow = 0, suppressTruncationLogs = false) {
   const src = fs.readFileSync(inputPath, 'utf8');
-  const instrumented = instrumentCode(src);
+  const instrumentOptions = { enableLoopContext: loopTailWindow > 0 };
+  const instrumentSource = (code) => instrumentCode(code, instrumentOptions);
+  const instrumented = instrumentSource(src);
 
   fs.writeFileSync(outputPath, instrumented, 'utf8');
   console.log(`Wrote ${outputPath}`);
@@ -385,6 +560,7 @@ function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsol
     clearTimeout,
     clearInterval,
     globalThis: {},
+    require,
   };
 
   context.window = context;
@@ -403,30 +579,16 @@ function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsol
   context.location = { href: 'http://localhost/', assign() { }, replace() { }, reload() { } };
   context.window.document = context.document;
 
-  context.__report = function (name, value) {
-    try {
-      let snapshot;
-      if (value === undefined) snapshot = undefined;
-      else if (typeof value === 'function') snapshot = `[Function: ${value.name || 'anonymous'}]`;
-      else if (typeof value === 'object' && value !== null) {
-        try {
-          snapshot = JSON.parse(JSON.stringify(value));
-        } catch (err) {
-          try {
-            snapshot = String(value);
-          } catch (e) {
-            snapshot = Object.prototype.toString.call(value);
-          }
-        }
-      } else {
-        snapshot = value;
-      }
-      const rec = { ts: Date.now(), name, value: snapshot };
-      logStream.write(JSON.stringify(rec) + '\n');
-      if (reportConsole) console.log('[__report]', rec);
-    } catch (err) { }
-    return value;
-  };
+  const { report, loopEnter, loopExit } = createLoopAwareReporter(
+    logStream,
+    reportConsole,
+    loopTailWindow,
+    repeatingPatternWindow,
+    suppressTruncationLogs
+  );
+  context.__report = report;
+  context.__loopContextEnter = loopEnter;
+  context.__loopContextExit = loopExit;
 
   const ctx = vm.createContext(context);
   ctx.global = ctx;
@@ -436,7 +598,7 @@ function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsol
 
   wrapEvalAndFunctionInContext(ctx, (codeStr) => {
     try {
-      return instrumentCode(codeStr);
+      return instrumentSource(codeStr);
     } catch (e) {
       return codeStr;
     }
@@ -447,9 +609,11 @@ function runInstrumentedFile(inputPath, outputPath, execute = true, reportConsol
     script.runInContext(ctx, { timeout: 60000 });
   } catch (err) {
     console.error('Execution error:', err && err.stack ? err.stack : err);
+    process.exit(1);
   } finally {
     logStream.end(() => {
       console.log('Observations appended to observations.jsonl');
+      process.exit(0);
     });
   }
 }
@@ -463,6 +627,9 @@ if (require.main === module) {
   let outputPath = 'output.js';
   let execute = true;
   let reportConsole = false;
+  let loopTailWindow = 0;
+  let repeatingPatternWindow = 0;
+  let suppressTruncatedLogs = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -475,6 +642,28 @@ if (require.main === module) {
       i++;
     } else if (arg === '--report-console') {
       reportConsole = true;
+    } else if (arg === '--loop-tail') {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        console.error('Error: --loop-tail requires a numeric value');
+        process.exit(2);
+      }
+      loopTailWindow = parseLoopTailArg(value);
+      i++;
+    } else if (arg.startsWith('--loop-tail=')) {
+      loopTailWindow = parseLoopTailArg(arg.split('=')[1]);
+    } else if (arg === '--repeating-pattern') {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        console.error('Error: --repeating-pattern requires a numeric value');
+        process.exit(2);
+      }
+      repeatingPatternWindow = parseRepeatingPatternArg(value);
+      i++;
+    } else if (arg.startsWith('--repeating-pattern=')) {
+      repeatingPatternWindow = parseRepeatingPatternArg(arg.split('=')[1]);
+    } else if (arg === '--no-truncated-logs') {
+      suppressTruncatedLogs = true;
     }
   }
 
@@ -483,7 +672,15 @@ if (require.main === module) {
     process.exit(2);
   }
 
-  runInstrumentedFile(inputPath, outputPath, execute, reportConsole);
+  runInstrumentedFile(
+    inputPath,
+    outputPath,
+    execute,
+    reportConsole,
+    loopTailWindow,
+    repeatingPatternWindow,
+    suppressTruncatedLogs
+  );
 }
 
 module.exports = { instrumentCode };
