@@ -68,7 +68,8 @@ To run instrument.js in a secure, isolated Docker container:
 
 ```bash
 docker run --rm -v $(pwd):/workspace vampyre-instrument examples/simple.js --report-console
-```
+
+```bash
 # [ 'Alice', 'Bob', 'Charlie' ]
 # [__report] {
 #   ts: 1760493315667,
